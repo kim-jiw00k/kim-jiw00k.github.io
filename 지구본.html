@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>AI News Map - Demo</title>
+<style>
+  html, body { margin:0; height:100%; background:#0a0f1a; color:#e6e8eb; font-family:system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  #globe { width:100%; height:100vh; position:relative; overflow:hidden; }
+  #hud {
+    position:absolute; top:16px; left:16px; z-index:10; background:rgba(0,0,0,.45);
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    border:1px solid rgba(255,255,255,.1); border-radius:12px; padding:12px 14px; font-size:14px; line-height:1.4;
+  }
+  #tooltip {
+    position:fixed; pointer-events:none; z-index:20; padding:6px 10px; font-size:13px;
+    background:rgba(20,24,33,.9); color:#fff; border:1px solid rgba(255,255,255,.08); border-radius:8px;
+    transform: translate(-50%, calc(-100% - 10px)); opacity:0; transition:opacity .12s ease;
+    white-space:nowrap;
+  }
+  a.btn {
+    display:inline-block; margin-top:8px; padding:8px 10px; border-radius:10px; text-decoration:none;
+    background:#1e90ff; color:white; font-weight:600;
+  }
+  .hint { opacity:.8; font-size:12px; }
+</style>
+</head>
+<body>
+  <div id="globe">
+    <div id="hud">
+      <div><strong>AI News Map 데모</strong></div>
+      <div class="hint">드래그로 회전 · 휠로 확대/축소 · 국가에 마우스를 올리거나 클릭</div>
+      <a class="btn" href="#" onclick="resetView();return false;">뷰 리셋</a>
+    </div>
+    <div id="tooltip"></div>
+  </div>
+
+  <!-- Three.js & helpers -->
+  <script src="https://unpkg.com/three/build/three.min.js"></script>
+  <script src="https://unpkg.com/three/examples/js/controls/OrbitControls.js"></script>
+  <!-- Three-Globe -->
+  <script src="https://unpkg.com/three-globe/dist/three-globe.min.js"></script>
+
+  <script>
+  // ---------- 기본 세팅 ----------
+  const container = document.getElementById('globe');
+  const tooltip = document.getElementById('tooltip');
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  container.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+
+  const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 2000);
+  camera.position.set(0, 0, 360);
+
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.06;
+  controls.rotateSpeed = 0.6;
+  controls.minDistance = 160;
+  controls.maxDistance = 600;
+
+  // 라이트
+  scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.7);
+  dirLight.position.set(-1, 1, 1);
+  scene.add(dirLight);
+
+  // ---------- 지구본 ----------
+  const globe = new ThreeGlobe()
+    .globeImageUrl('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg')
+    .bumpImageUrl('https://unpkg.com/three-globe/example/img/earth-topology.png')
+    .backgroundColor('rgba(0,0,0,0)')
+    .polygonsTransitionDuration(250);
+  scene.add(globe);
+
+  // 자동 회전(사용자 조작 시 서서히 감소)
+  let autoRotateSpeed = 0.003;
+  let lastUserInteracted = performance.now();
+
+  function markUserInteraction() {
+    lastUserInteracted = performance.now();
+  }
+  renderer.domElement.addEventListener('pointerdown', markUserInteraction, {passive:true});
+  renderer.domElement.addEventListener('wheel', markUserInteraction, {passive:true});
+
+  // ---------- 국가 경계 데이터 로드 ----------
+  // name 속성이 포함된 GeoJSON(three-globe 예제 데이터)
+  const COUNTRIES_GEOJSON_URL = 'https://unpkg.com/three-globe/example/datasets/ne_110m_admin_0_countries.geojson';
+
+  fetch(COUNTRIES_GEOJSON_URL).then(res => res.json()).then(geojson => {
+    const features = geojson.features;
+
+    globe
+      .polygonsData(features)
+      .polygonAltitude(() => 0.01)
+      .polygonStrokeColor(() => 'rgba(135, 206, 250, 0.9)')   // 선
+      .polygonSideColor(() => 'rgba(30, 144, 255, 0.25)')     // 옆면
+      .polygonCapColor(f => f === hovered ? 'rgba(255, 255, 255, 0.6)' : 'rgba(30, 144, 255, 0.35)')
+      .onPolygonHover(handleHover)
+      .onPolygonClick(handleClick);
+  });
+
+  // ---------- 호버/클릭 처리 ----------
+  let hovered = null;
+
+  function handleHover(feat, prev) {
+    hovered = feat || null;
+    globe.polygonCapColor(globe.polygonCapColor()); // 리렌더 트리거
+    if (hovered) {
+      showTooltip(hovered);
+    } else {
+      hideTooltip();
+    }
+  }
+
+  function handleClick(feat) {
+    const name = feat && (feat.properties?.name || feat.properties?.ADMIN || 'Unknown');
+    // 라우팅 규칙: /country/{name}
+    const url = `/country/${encodeURIComponent(name)}`;
+    // 데모: 실제로 이동시키려면 아래 주석 해제
+    // window.location.href = url;
+    alert(`국가 선택: ${name}\n(원하는 라우팅: ${url})`);
+  }
+
+  // ---------- 툴팁 ----------
+  function showTooltip(feat) {
+    const name = feat.properties?.name || feat.properties?.ADMIN || 'Unknown';
+    tooltip.textContent = name;
+    tooltip.style.opacity = '1';
+  }
+  function hideTooltip() {
+    tooltip.style.opacity = '0';
+  }
+
+  // 화면상 마우스 위치에 맞춰 툴팁 이동
+  window.addEventListener('pointermove', (e) => {
+    tooltip.style.left = e.clientX + 'px';
+    tooltip.style.top  = e.clientY + 'px';
+  }, {passive:true});
+
+  // ---------- 리사이즈 ----------
+  window.addEventListener('resize', () => {
+    const { clientWidth:w, clientHeight:h } = container;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+  });
+
+  // ---------- 뷰 리셋 ----------
+  function resetView() {
+    controls.reset();
+    camera.position.set(0, 0, 360);
+    controls.update();
+  }
+  window.resetView = resetView;
+
+  // ---------- 루프 ----------
+  (function animate(){
+    requestAnimationFrame(animate);
+
+    // 사용자 입력이 없으면 자동 회전
+    const now = performance.now();
+    const idleMs = now - lastUserInteracted;
+    const t = Math.min(1, idleMs / 2000); // 2초에 걸쳐 서서히 자동회전 복귀
+    const speed = autoRotateSpeed * t;
+
+    globe.rotation.y += speed;
+
+    controls.update();
+    renderer.render(scene, camera);
+  })();
+  </script>
+</body>
+</html>
